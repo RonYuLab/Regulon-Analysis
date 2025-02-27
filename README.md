@@ -5,7 +5,6 @@ Functions and supplemental data for regulon analysis as part of https://www.bior
 
 
 **To Do:**
-- Add regulon analysis module
 - Add html of downstream analysis code
 - Add summary .txt file for command line steps
 - Add .rmd files for R preprocessing steps.
