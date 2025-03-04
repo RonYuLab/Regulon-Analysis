@@ -1,0 +1,178 @@
+---
+title: "genotype_integration"
+author: "Davin Marro"
+date: "2024-03-19"
+output: html_document
+---
+
+```{r}
+library(Matrix)
+library(Seurat)
+library(scCustomize)
+library(glue)
+library(SoupX)
+library(scDblFinder)
+library(SCopeLoomR)
+library(SCENIC)
+library(SingleCellExperiment)
+library(tidyverse)
+```
+
+```{r}
+# Read in the genotype-integrated samples
+wt_path <-'/home/dm2763/projects/scenic/pyscenic/OE_final/seurats/wt_integrated_all.rds'
+fzd1ko_path <- '/home/dm2763/projects/scenic/pyscenic/OE_final/seurats/fzd1ko_integrated_all.rds'
+
+wt_integrated <- readRDS(wt_path)
+fzd1ko_integrated <- readRDS(fzd1ko_path)
+
+# Set default assay for RNA for integration 
+DefaultAssay(wt_integrated) <- "RNA"
+DefaultAssay(fzd1ko_integrated) <- "RNA"
+```
+
+```{r}
+# Create batch variable: the same as original identity before integration. 
+fzd1ko_integrated@meta.data$batch <- fzd1ko_integrated@meta.data$orig.ident
+wt_integrated@meta.data$batch <- wt_integrated@meta.data$orig.ident
+```
+
+```{r}
+object_list <- c(wt_integrated,fzd1ko_integrated)
+object_list <- lapply(X = object_list, FUN = function(x){
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, selection.method = "vst",nfeatures = 2000)
+})
+
+features <- SelectIntegrationFeatures(object.list = object_list)
+```
+
+```{r}
+OE_anchors <- FindIntegrationAnchors(object.list = object_list, anchor.features = features)
+OE_integrated <- IntegrateData(anchorset = OE_anchors)
+```
+
+```{r}
+DefaultAssay(OE_integrated) <- "integrated"
+OE_integrated <- ScaleData(OE_integrated,verbose = FALSE)
+OE_integrated <- RunPCA(OE_integrated, npcs = 50, verbose = FALSE)
+OE_integrated <- RunUMAP(OE_integrated, reduction = "pca",dims = 1:30)
+OE_integrated <- FindNeighbors(OE_integrated, reduction = "pca", dims = 1:30)
+OE_integrated <- FindClusters(OE_integrated, resolution = 0.5)
+```
+```{r}
+# Initialize a dictionary matching batch variable to their respective genotypes
+genotype_dictionary <- list() 
+for (key in unique(OE_integrated$batch)) {
+  genotype_dictionary[[key]] <- NA  
+}
+
+for(key in names(genotype_dictionary)){
+  if(grepl("Ctrl", key) == TRUE){
+    genotype_dictionary[[key]] <- "Wt"
+  } else{
+    genotype_dictionary[[key]] <- "Fzd1KO"
+  }
+}
+```
+
+```{r}
+# Add genotype metadata
+OE_integrated@meta.data$genotype <- NA
+
+# Function to lookup genotype based on batch
+lookup_genotype <- function(batch, genotype_dict) {
+  return(genotype_dict[batch])
+}
+
+# Loop through rows of Df and add genotype column
+for (i in 1:nrow(OE_integrated@meta.data)) {
+  # Get current row batch value
+  batch <- OE_integrated@meta.data[i, "batch"]
+  
+  # Lookup genotype using the provided function
+  genotype <- lookup_genotype(batch, genotype_dictionary)
+  
+  # Check if genotype lookup was successful (value may be NULL if not found)
+  if (is.null(genotype)) {
+    warning(paste("Genotype not found for batch:", batch))
+  }
+  
+  # Add genotype to current row
+  OE_integrated@meta.data[i, "genotype"] <- genotype
+}
+```
+
+```{r}
+# Check quality of integration. 
+library(gridExtra)
+p1 <- DimPlot(OE_integrated,reduction = "umap",group.by = "genotype")
+p2 <- DimPlot(OE_integrated, reduction = "umap", group.by = "batch")
+p1
+p2
+```
+
+```{r}
+saveRDS(OE_integrated, file = "OE_genotype_integrated.Rds")
+```
+
+```{r}
+OE_integrated <- readRDS(file = "OE_genotype_integrated.Rds")
+```
+
+```{r}
+Idents(OE_integrated) <- 'seurat_clusters'
+DefaultAssay(OE_integrated) <- 'RNA'
+
+# Extract relevant data once
+exprMat <- OE_integrated@assays$RNA@data
+cellInfo <- OE_integrated@meta.data
+
+# Filter expression matrix based on expression threshold
+filter_expr_matrix <- function(expr_matrix) {
+  loci1 <- which(rowSums(expr_matrix) > 1*.01*ncol(expr_matrix))
+  return(expr_matrix[loci1, ])
+}
+
+# Apply filtering to desired variable
+OE_integrated <- filter_expr_matrix(exprMat)
+```
+
+```{r}
+add_cell_annotation <- function(loom, cellAnnotation)
+{
+  cellAnnotation <- data.frame(cellAnnotation)
+  if(any(c("nFeature_RNA", "nCount_RNA") %in% colnames(cellAnnotation)))
+  {
+    warning("Columns 'nGene' and 'nUMI' will not be added as annotations to the loom file.")
+    cellAnnotation <- cellAnnotation[,colnames(cellAnnotation) != "nFeature_RNA", drop=FALSE]
+    cellAnnotation <- cellAnnotation[,colnames(cellAnnotation) != "nCount_RNA", drop=FALSE]
+  }
+  
+  if(ncol(cellAnnotation)<=0) stop("The cell annotation contains no columns")
+  if(!all(get_cell_ids(loom) %in% rownames(cellAnnotation))) stop("Cell IDs are missing in the annotation")
+  
+  cellAnnotation <- cellAnnotation[get_cell_ids(loom),,drop=FALSE]
+  # Add annotation
+  for(cn in colnames(cellAnnotation))
+  {
+    add_col_attr(loom=loom, key=cn, value=cellAnnotation[,cn])
+  }
+  
+  invisible(loom)
+}
+```
+
+```{r}
+OE_loom <- build_loom('/home/dm2763/projects/scenic/pyscenic/OE_final/loom/OE_genotype_integrated.loom',dgem = OE_integrated)
+OE_loom <- add_cell_annotation(OE_loom, cellInfo)
+```
+```{r}
+OE_loom <- SCopeLoomR::open_loom('/home/dm2763/projects/scenic/pyscenic/OE_final/loom/OE_genotype_integrated.loom')
+close_loom(OE_loom)
+```
+
+
+
+
+

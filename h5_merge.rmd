@@ -1,0 +1,538 @@
+---
+title: "merge_h5"
+author: "Davin Marro"
+date: "2024-01-22"
+output: html_document
+---
+## Files Merged for Final pySCENIC dataset (1/22/2024)
+
+          MOLNG2453                               
+E13.5_CD1_OE    //    L35289
+E18.5_CD1_OE    //    L35290
+P10_CD1_OE      //    L35291
+P14_CD1_OE      //    L35292
+Adult_CD1_OE    //    L35293
+
+          MOLNG2407
+P3_CD1_OSNs	    //    L34687
+P7_CD1_OSNs	    //    L34688
+P0_CD1_OSNs	    //    L34689
+P21_CD1_OSNs    //  	L34690
+
+          MOLNG3334
+Fzd1cKO_OE_P5   //    L48122
+Ctrl_OE_P5      //    L48123
+Fzd1cKO_OE_P7   //    L48126
+Ctrl_OE_P7      //    L48127
+Fzd1cKO_OE_P10  //    L49784
+Ctrl_OE_P10     //    L49785
+
+          MOLNG3650
+P3_Fzd1KO_stim  //    L59804
+P3_Ctrl_stim    //    L59805
+P3_Ctrl_NE      //    L60076
+P3_Fzd1KO_NE    //    L60075
+P7_Fzd1KO_stim  //    L59806
+P7_Ctrl_stim    //    L59807
+P7_Ctrl_NE      //    L60078
+P7_Fzd1KO_NE    //    L60077
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(Matrix)
+library(Seurat)
+library(scCustomize)
+library(glue)
+library(SoupX)
+library(scDblFinder)
+library(SCopeLoomR)
+library(SCENIC)
+library(SingleCellExperiment)
+library(tidyverse)
+```
+
+```{r}
+# Initialize a sample dictionary. 23 samples in total
+sample_dict = c(
+  L59804 = "P3_Fzd1KO_stim",
+  L59805 = "P3_Ctrl_stim",
+  L60076 = "P3_Ctrl_NE",
+  L60075 = "P3_Fzd1KO_NE",
+  L59806 = "P7_Fzd1KO_stim",
+  L59807 = "P7_Ctrl_stim",
+  L60078 = "P7_Ctrl_NE",
+  L60077 = "P7_Fzd1KO_NE",
+  L49785 = "P10_Ctrl_NE",
+  L49784 = "P10_Fzd1KO_NE",
+  L48127 = "P7_Ctrl_NE_2",
+  L48126 = "P7_Fzd1KO_NE_2",
+  L48123 = "P5_Ctrl_NE",
+  L48122 = "P5_Fzd1KO_NE",
+  L34690 = "P21_Ctrl_NE",
+  L34689 = "P0_Ctrl_NE",
+  L34688 = "P7_Ctrl_NE_3",
+  L34687 = "P3_Ctrl_NE_2",
+  L35293 = "Adult_Ctrl_NE",
+  L35292 = "P14_Ctrl_NE",
+  L35291 = "P10_Ctrl_NE_2",
+  L35290 = "E18_Ctrl_NE",
+  L35289 = "E13_Ctrl_NE"
+)
+```
+
+```{r}
+# Assign pathnames to project folders, we take 10x filtered and raw matrices for SoupX. 
+MOLNG2407_path = '/home/dm2763/projects/scenic/pyscenic/OE_final/Filtered_mtx/MOLNG2407'
+MOLNG2453_path = '/home/dm2763/projects/scenic/pyscenic/OE_final/Filtered_mtx/MOLNG2453'
+MOLNG3334_path = '/home/dm2763/projects/scenic/pyscenic/OE_final/Filtered_mtx/MOLNG3334'
+MOLNG3650_path = '/home/dm2763/projects/scenic/pyscenic/OE_final/Filtered_mtx/MOLNG3650'
+
+MOLNG2407_R_path = '/home/dm2763/projects/scenic/pyscenic/OE_final/Raw_mtx/MOLNG2407_RAW'
+MOLNG2453_R_path = '/home/dm2763/projects/scenic/pyscenic/OE_final/Raw_mtx/MOLNG2453_RAW'
+MOLNG3334_R_path = '/home/dm2763/projects/scenic/pyscenic/OE_final/Raw_mtx/MOLNG3334_RAW' 
+MOLNG3650_R_path = '/home/dm2763/projects/scenic/pyscenic/OE_final/Raw_mtx/MOLNG3650_RAW' 
+
+path_list = c(MOLNG2407_path, MOLNG2453_path, MOLNG3334_path, MOLNG3650_path)
+path_list_R = c(MOLNG3650_R_path, MOLNG3334_R_path, MOLNG2453_R_path, MOLNG2407_R_path)
+```
+
+```{r}
+group_files_by_condition <- function(path_list_R, path_list, sample_dict) {
+  # Create empty lists to store grouped files
+  fzd1ko_files_raw <- list()
+  fzd1ko_files_filtered <- list()
+  ctrl_files_raw <- list()
+  ctrl_files_filtered <- list()
+
+  # Process raw files
+  for (path in path_list_R) {
+    file_paths <- list.files(path, full.names = TRUE)
+    file_names <- list.files(path)
+    setwd(path)
+    
+    for (i in seq_along(file_paths)) {
+      name <- file_names[i]
+      h5_data <- Read10X_h5(filename = file_paths[i], use.names = TRUE)
+      
+      # Store the entire h5 object instead of just the name
+      if (grepl("_Fzd1KO_", sample_dict[name])) {
+        fzd1ko_files_raw[[name]] <- h5_data
+      } else if (grepl("_Ctrl_", sample_dict[name])) {
+        ctrl_files_raw[[name]] <- h5_data
+      }
+      rm(h5_data)
+    }
+  }
+  print(paste("Raw h5 files processed."))
+
+  # Process filtered files
+  for (path in path_list) {
+    file_paths <- dir(path, full.names = TRUE)
+    file_names <- dir(path, full.names = FALSE)
+    setwd(path)
+
+    for (i in seq_along(file_paths)) {
+      name <- file_names[[i]]
+      h5_data <- Read10X_h5(filename = file_paths[[i]], use.names = TRUE)
+      
+      # Store the  h5 object 
+      if (grepl("_Fzd1KO_", sample_dict[name])) {
+        fzd1ko_files_filtered[[name]] <- h5_data
+      } else if (grepl("_Ctrl_", sample_dict[name])) {
+        ctrl_files_filtered[[name]] <- h5_data
+      }
+      rm(h5_data)
+    }
+  }
+  print(paste("Filtered h5 files processed."))
+  print(paste("Removing temporary lists."))
+  
+  # Load the lists into memory
+    fzd1ko_raw <<- fzd1ko_files_raw
+    ctrl_raw <<- ctrl_files_raw
+    fzd1ko_filtered <<- fzd1ko_files_filtered
+    ctrl_filtered <<- ctrl_files_filtered
+}
+```
+
+```{r}
+# This will return a filtered and raw list of h5 files for each genotype (wt aka 'Ctrl' and mutant aka 'Fzd1KO')
+group_files_by_condition(path_list_R = path_list_R,path_list = path_list, sample_dict = sample_dict)
+```
+
+```{r}
+convert_h5_to_seurat <- function(wt_list,mutant_list,sample_dict) {
+  wt_seurat <- list()
+  print(paste("Converting wildtype objects."))
+  for (i in seq_along(wt_list)){
+    seurat <- CreateSeuratObject(counts = wt_list[[i]], min.cells = 0, min.features = 500)
+    name <- names(wt_list[i])
+    #print(paste(name, "key")) # Should be the key in sample_dict
+    name <- sample_dict[name]
+    #print(paste(name,"value")) # Should be the value or experiment name in sample dict
+    seurat$orig.ident <- as.character(name)
+    wt_seurat <- c(wt_seurat, seurat)
+  }
+  
+  fzd1ko_seurat <- list()
+  print(paste("Converting mutant objects."))
+  for(i in seq_along(mutant_list)){
+    seurat <- CreateSeuratObject(counts = mutant_list[[i]], min.cells = 0, min.features = 500)
+    name <- names(mutant_list)[i]
+    #print(paste(name, "key")) # Should be key in sample_dict
+    name <- sample_dict[name]
+    #print(paste(name,"value")) # Should be the value or experiment in sample dict
+    seurat$orig.ident <- as.character(name)
+    fzd1ko_seurat <- c(fzd1ko_seurat, seurat)
+  }
+  wt_seurat <<- wt_seurat
+  fzd1ko_seurat <<- fzd1ko_seurat
+  print(paste("Done."))
+}
+```
+
+```{r}
+convert_h5_to_seurat(wt_list = ctrl_filtered,mutant_list = fzd1ko_filtered, sample_dict = sample_dict)
+```
+
+```{r}
+# Mad outlier function: credit to Sanbomics (https://www.youtube.com/watch?v=Zs4UEQ9LZ-Y) adapted from sc-best-practices
+mad_outlier <- function(object, metric, nmads){
+  M <- object@meta.data[[metric]]
+  median_M <- median(M, na.rm = TRUE)
+  mad_M <- mad(M, na.rm = TRUE)
+  outlier <- (M < (median_M - nmads * mad_M)) | (M > (median_M + nmads * mad_M))
+  return(outlier)
+}
+
+process_seurat <- function(wt_list, mutant_list){
+  # Takes in a list of seurat objects grouped by genotype
+  wt_processed_objects <- list()
+  print("Processing wildtype objects")
+  for(i in seq_along(wt_list)){
+    object <- wt_list[[i]]
+    print(paste("Working on object:", unique(object$orig.ident)))
+    
+    # calculate some qc metrics
+    object$log1p_total_counts <- log1p(object@meta.data$nCount_RNA)
+    object$log1p_n_genes_by_counts <- log1p(object@meta.data$nFeature_RNA)
+    object[["percent.mt"]] <- PercentageFeatureSet(object, pattern = "^mt-")
+    
+    # Filter based on mad outlier
+    bool_vector <- !mad_outlier(object,'log1p_total_counts', 5) & !mad_outlier(object,'log1p_n_genes_by_counts', 5) & !mad_outlier(object,'percent.mt',3)
+    object <- subset(object, cells = which(bool_vector))
+    
+    # Do seurat processing
+    object <- SCTransform(object = object, vars.to.regress = "percent.mt",verbose = FALSE)
+    #print("Running PCA")
+    object <- RunPCA(object = object, npcs = 50, verbose = FALSE)
+    #print("Creating NN graph")
+    object <- FindNeighbors(object = object, dims = 1:50, verbose = FALSE)
+    #print("Clustering")
+    object <- FindClusters(object = object, resolution = 0.5, verbose = FALSE)
+    
+    wt_processed_objects <- c(wt_processed_objects, object)
+  }
+  
+  fzd1ko_processed_objects <- list()
+  print("Processing mutant objects")
+  for(i in seq_along(mutant_list)){
+    object <- mutant_list[[i]]
+    print(paste("Working on object:", unique(object$orig.ident)))
+    
+    # calculate some qc metrics
+    object$log1p_total_counts <- log1p(object@meta.data$nCount_RNA)
+    object$log1p_n_genes_by_counts <- log1p(object@meta.data$nFeature_RNA)
+    object[["percent.mt"]] <- PercentageFeatureSet(object, pattern = "^mt-")
+    
+    # Filter based on mad outlier
+    bool_vector <- !mad_outlier(object,'log1p_total_counts', 5) & !mad_outlier(object,'log1p_n_genes_by_counts', 5) & !mad_outlier(object,'percent.mt',3)
+    object <- subset(object, cells = which(bool_vector))
+    
+    # Do seurat processing
+    object <- SCTransform(object = object, vars.to.regress = "percent.mt",verbose = FALSE)
+    #print("Running PCA")
+    object <- RunPCA(object = object, npcs = 50, verbose = FALSE)
+    #print("Creating NN graph")
+    object <- FindNeighbors(object = object, dims = 1:50, verbose = FALSE)
+    #print("Clustering")
+    object <- FindClusters(object = object, resolution = 0.5, verbose = FALSE)
+
+    fzd1ko_processed_objects <- c(fzd1ko_processed_objects, object)
+  }
+  fzd1ko_processed_objects <<- fzd1ko_processed_objects
+  wt_processed_objects <<- wt_processed_objects
+}
+
+make_soup <- function(object){
+  sample_id <- as.character()
+}
+```
+
+```{r}
+# Basic QC 
+process_seurat(wt_list = wt_seurat, mutant_list = fzd1ko_seurat)
+```
+
+
+```{r}
+fzd1ko_processed_objects_filt <- list()
+for (i in seq_along(fzd1ko_processed_objects)) {
+  object <- fzd1ko_processed_objects[[i]]
+  id <- unique(object$orig.ident)
+  h5_index <- which(sample_dict == id)
+  h5_names <- names(sample_dict)
+  h5_name <- h5_names[h5_index]
+  
+  # Check if id exists in any value of sample_dict
+  if (sample_dict[h5_name] == id) {
+    print(paste("Checkpoint Passed:", h5_name, "corresponds to" ,id))
+    
+    # SoupX on object
+    sc <- SoupChannel(fzd1ko_raw[[h5_name]], object@assays$RNA@counts)
+    sc <- setClusters(sc, object$seurat_clusters)
+    sc <- autoEstCont(sc, doPlot = FALSE, verbose = FALSE)
+    out <- adjustCounts(sc, roundToInt = TRUE, verbose = FALSE)
+    
+    object@assays$RNA$counts <- out
+    print(paste("Filtered soup from:", id))
+    fzd1ko_processed_objects_filt <- c(fzd1ko_processed_objects_filt, object)
+  } else{
+    print(paste("Checkpoint Failed:", h5_name, "does not correspond to", id))
+    break
+  }
+}
+```
+
+```{r}
+wt_processed_objects_filt <- list()
+for (i in seq_along(wt_processed_objects)) {
+  object <- wt_processed_objects[[i]]
+  id <- unique(object$orig.ident)
+  h5_index <- which(sample_dict == id)
+  h5_names <- names(sample_dict)
+  h5_name <- h5_names[h5_index]
+  
+  # Check if id exists in any value of sample_dict
+  if (sample_dict[h5_name] == id) {
+    print(paste("Checkpoint Passed:", h5_name, "corresponds to" ,id))
+    
+    # SoupX on object
+    sc <- SoupChannel(ctrl_raw[[h5_name]], object@assays$RNA@counts)
+    sc <- setClusters(sc, object$seurat_clusters)
+    sc <- autoEstCont(sc, doPlot = FALSE, verbose = FALSE)
+    out <- adjustCounts(sc, roundToInt = TRUE, verbose = FALSE)
+    
+    object@assays$RNA$counts <- out
+    print(paste("Filtered soup from:", id))
+    wt_processed_objects_filt <- c(wt_processed_objects_filt,object)
+  } else{
+    print(paste("Checkpoint Failed:", h5_name, "does not correspond to", id))
+  }
+}
+
+```
+
+```{r}
+# Doublet filtering via scDblFinder
+fzd1ko_final_objects <- list()
+for(i in seq_along(fzd1ko_processed_objects_filt)){
+  set.seed(111)
+  object <- fzd1ko_processed_objects_filt[[i]]
+  name <- unique(fzd1ko_processed_objects_filt[[i]]$orig.ident)
+  print(paste("Scoring Doublets in Object:", name))
+  object_sce <- scDblFinder(GetAssayData(object, slot = "counts", clusters = object$seurat_clusters),verbose = FALSE)
+  object$scDblFinder.score <- object_sce$scDblFinder.score
+  object$scDblFinder.class <- object_sce$scDblFinder.class
+  fzd1ko_final_objects <- c(fzd1ko_final_objects, object)
+}
+```
+
+```{r}
+# Doublet filtering via scDblFinder
+wt_final_objects <- list()
+for(i in seq_along(wt_processed_objects_filt)){
+  set.seed(111)
+  object <- wt_processed_objects_filt[[i]]
+  name <- unique(wt_processed_objects_filt[[i]]$orig.ident)
+  print(paste("Scoring Doublets in Object:", name))
+  object_sce <- scDblFinder(GetAssayData(object, slot = "counts", clusters = object$seurat_clusters),verbose = FALSE)
+  object$scDblFinder.score <- object_sce$scDblFinder.score
+  object$scDblFinder.class <- object_sce$scDblFinder.class
+  wt_final_objects <- c(wt_final_objects, object)
+}
+```
+
+```{r}
+fzd1ko_final_objects <- lapply(fzd1ko_final_objects, FUN = function(x){
+  x <- FindVariableFeatures(x, selection.method = "vst",nfeatures = 2000)
+})
+
+features <- SelectIntegrationFeatures(object.list = fzd1ko_final_objects)
+anchors <- FindIntegrationAnchors(object.list = fzd1ko_final_objects,anchor.features = features,verbose = FALSE)
+fzd1ko_objects_integrated <- IntegrateData(anchorset = anchors)
+
+
+wt_final_objects <- lapply(wt_final_objects, FUN = function(x){
+  x <- FindVariableFeatures(x, selection.method = "vst",nfeatures = 2000)
+})
+
+features <- SelectIntegrationFeatures(object.list = wt_final_objects)
+anchors <- FindIntegrationAnchors(object.list = wt_final_objects,anchor.features = features,verbose = FALSE)
+wt_objects_integrated <- IntegrateData(anchorset = anchors)
+```
+
+```{r}
+# Free up space
+rm(wt_processed_objects)
+rm(wt_processed_objects_filt)
+rm(wt_final_objects)
+```
+
+```{r}
+integrated_object <- fzd1ko_objects_integrated
+DefaultAssay(integrated_object) <- 'integrated'
+print("SCTransforming Data")
+integrated_object <- SCTransform(object = integrated_object, vars.to.regress = "percent.mt",verbose = FALSE)
+print("Running PCA")
+integrated_object <- RunPCA(object = integrated_object, npcs = 50, verbose = FALSE)
+print("Creating NN graph")
+integrated_object <- FindNeighbors(object = integrated_object, dims = 1:50, verbose = FALSE)
+print("Clustering")
+integrated_object <- FindClusters(object = integrated_object, resolution = 0.5, verbose = FALSE)
+integrated_object <- RunUMAP(object = integrated_object, reduction = 'pca',dims = 1:50)
+fzd1ko_markers <- FindAllMarkers(integrated_object,
+                only.pos = TRUE, min.pct = 0.5, logfc.threshold = 0.5)
+fzd1ko_integrated <- integrated_object
+```
+
+```{r}
+integrated_object <- wt_objects_integrated
+DefaultAssay(integrated_object) <- 'integrated'
+print("SCTransforming Data")
+integrated_object <- SCTransform(object = integrated_object, vars.to.regress = "percent.mt",verbose = FALSE)
+print("Running PCA")
+integrated_object <- RunPCA(object = integrated_object, npcs = 50, verbose = FALSE)
+print("Creating NN graph")
+integrated_object <- FindNeighbors(object = integrated_object, dims = 1:50, verbose = FALSE)
+print("Clustering")
+integrated_object <- FindClusters(object = integrated_object, resolution = 0.5, verbose = FALSE)
+integrated_object <- RunUMAP(object = integrated_object, reduction = 'pca',dims = 1:50)
+wt_markers <- FindAllMarkers(integrated_object,
+                only.pos = TRUE, min.pct = 0.5, logfc.threshold = 0.5)
+wt_integrated <- integrated_object
+```
+```{r}
+# Labeled these pre-filtered or 'all' signifying all cells, so user knows they don't directly correspond with the .loom  , that has expression mtx filter applied.
+setwd('/home/dm2763/projects/scenic/pyscenic/OE_final/seurats')
+saveRDS(wt_integrated, "wt_integrated_all.rds")
+saveRDS(fzd1ko_integrated, "fzd1ko_integrated_all.rds")
+```
+
+```{r}
+Idents(fzd1ko_integrated) <- 'seurat_clusters'
+DefaultAssay(fzd1ko_integrated) <- 'RNA'
+
+mut_exprMat <- fzd1ko_integrated@assays$RNA@data
+mut_cellInfo <- fzd1ko_integrated@meta.data
+
+mut_loci1 <- which(rowSums(mut_exprMat) > 1*.01*ncol(mut_exprMat))
+mut_exprMat_filter <- mut_exprMat[mut_loci1, ]
+
+Idents(fzd1ko_integrated) <- 'seurat_clusters'
+DefaultAssay(fzd1ko_integrated) <- 'RNA'
+
+mut_exprMat <- fzd1ko_integrated@assays$RNA@data
+mut_cellInfo <- fzd1ko_integrated@meta.data
+
+mut_loci1 <- which(rowSums(mut_exprMat) > 1*.01*ncol(mut_exprMat))
+fzd1ko_integrated <- mut_exprMat[mut_loci1, ]
+```
+
+```{r}
+Idents(wt_integrated) <- 'seurat_clusters'
+DefaultAssay(wt_integrated) <- 'RNA'
+
+wt_exprMat <- wt_integrated@assays$RNA@data
+wt_cellInfo <- wt_integrated@meta.data
+
+wt_loci1 <- which(rowSums(wt_exprMat) > 1*.01*ncol(wt_exprMat))
+wt_exprMat_filter <- wt_exprMat[wt_loci1, ]
+
+Idents(wt_integrated) <- 'seurat_clusters'
+DefaultAssay(wt_integrated) <- 'RNA'
+
+wt_exprMat <- wt_integrated@assays$RNA@data
+wt_cellInfo <- wt_integrated@meta.data
+
+wt_loci1 <- which(rowSums(wt_exprMat) > 1*.01*ncol(wt_exprMat))
+wt_integrated <- wt_exprMat[wt_loci1, ]
+```
+
+```{r}
+## Transfer into loom files
+
+add_cell_annotation <- function(loom, cellAnnotation)
+{
+  cellAnnotation <- data.frame(cellAnnotation)
+  if(any(c("nFeature_RNA", "nCount_RNA") %in% colnames(cellAnnotation)))
+  {
+    warning("Columns 'nGene' and 'nUMI' will not be added as annotations to the loom file.")
+    cellAnnotation <- cellAnnotation[,colnames(cellAnnotation) != "nFeature_RNA", drop=FALSE]
+    cellAnnotation <- cellAnnotation[,colnames(cellAnnotation) != "nCount_RNA", drop=FALSE]
+  }
+  
+  if(ncol(cellAnnotation)<=0) stop("The cell annotation contains no columns")
+  if(!all(get_cell_ids(loom) %in% rownames(cellAnnotation))) stop("Cell IDs are missing in the annotation")
+  
+  cellAnnotation <- cellAnnotation[get_cell_ids(loom),,drop=FALSE]
+  # Add annotation
+  for(cn in colnames(cellAnnotation))
+  {
+    add_col_attr(loom=loom, key=cn, value=cellAnnotation[,cn])
+  }
+  
+  invisible(loom)
+}
+
+```
+
+```{r}
+wt_loom <- build_loom('/home/dm2763/projects/scenic/pyscenic/OE_final/loom/wt_integrated.loom',dgem = wt_exprMat_filter)
+wt_loom <- add_cell_annotation(wt_loom, wt_cellInfo)
+```
+
+```{r}
+setwd('/home/dm2763/projects/scenic/pyscenic/OE_final/seurats/')
+saveRDS(wt_markers,"wt_markers_all.rds")
+```
+
+```{r}
+wt_loom <- SCopeLoomR::open_loom('/home/dm2763/projects/scenic/pyscenic/OE_final/loom/wt_integrated.loom')
+close_loom(wt_loom)
+```
+
+```{r}
+fzd1ko_loom <- build_loom('/home/dm2763/projects/scenic/pyscenic/OE_final/loom/fzd1ko_integrated.loom',dgem = mut_exprMat_filter)
+fzd1ko_loom <- add_cell_annotation(fzd1ko_loom,mut_cellInfo)
+```
+
+```{r}
+setwd('/home/dm2763/projects/scenic/pyscenic/OE_final/seurats/')
+fzd1ko_markers <- fz1ko_markers
+saveRDS(fzd1ko_markers,"fzd1ko_markers_all.rds")
+```
+
+```{r}
+fzd1ko_loom <- SCopeLoomR::open_loom('/home/dm2763/projects/scenic/pyscenic/OE_final/loom/fzd1ko_integrated.loom')
+close_loom(fzd1ko_loom)
+```
+
+```{r}
+setwd('/home/dm2763/projects/scenic/pyscenic/OE_final/seurats')
+saveRDS(wt_markers,file = "markers.")
+```
